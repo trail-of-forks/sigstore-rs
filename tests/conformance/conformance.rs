@@ -17,6 +17,7 @@
 // https://github.com/sigstore/sigstore-conformance/blob/main/docs/cli_protocol.md
 
 extern crate tracing_subscriber;
+use base64::{engine::general_purpose::STANDARD as BASE64_STD_ENGINE, Engine as _};
 use clap::{Parser, Subcommand};
 use std::fs;
 use tracing_subscriber::prelude::*;
@@ -144,7 +145,9 @@ pub async fn main() -> anyhow::Result<()> {
             artifact,
         }) => {
             let certificate = fs::read_to_string(certificate)?;
+            let certificate = BASE64_STD_ENGINE.encode(certificate);
             let signature = fs::read_to_string(signature)?;
+            let signature = signature.trim(); // https://github.com/sigstore/sigstore-rs/issues/288
             let artifact = fs::read(artifact)?;
 
             Client::verify_blob(&certificate, &signature, &artifact)?;
