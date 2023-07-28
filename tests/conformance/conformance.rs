@@ -16,10 +16,21 @@
 // CLI implemented to specification:
 // https://github.com/sigstore/sigstore-conformance/blob/main/docs/cli_protocol.md
 
+extern crate tracing_subscriber;
 use clap::{Parser, Subcommand};
+use std::fs;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{fmt, EnvFilter};
+
+use sigstore::cosign::client::Client;
+use sigstore::cosign::CosignCapabilities;
+use sigstore::registry::ClientConfig;
 
 #[derive(Parser, Debug)]
 struct Cli {
+    #[arg(short, long)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -105,6 +116,50 @@ struct VerifyBundle {
 }
 
 #[tokio::main]
-pub async fn main() {
+pub async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    let level_filter = if cli.verbose { "debug" } else { "info" };
+    let filter_layer = EnvFilter::new(level_filter);
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .init();
+
+    let auth = &sigstore::registry::Auth::Anonymous;
+    let mut oci_client_config = ClientConfig::default();
+
+    match &cli.command {
+        Commands::Sign(Sign {
+            identity_token,
+            signature,
+            certificate,
+            artifact,
+        }) => (),
+        Commands::Verify(Verify {
+            signature,
+            certificate,
+            certificate_identity,
+            certificate_oidc_issuer,
+            artifact,
+        }) => {
+            let certificate = fs::read_to_string(certificate)?;
+            let signature = fs::read_to_string(signature)?;
+            let artifact = fs::read(artifact)?;
+
+            Client::verify_blob(&certificate, &signature, &artifact)?;
+        }
+        _ => (),
+        /*
+               SignBundle(SignBundle { .. }) => panic!(),
+               VerifyBundle(VerifyBundle { .. }) => panic!(),
+        */
+    }
+
+    /*
+    let mut client_builder =
+        sigstore::cosign::ClientBuilder::default().with_oci_client_config(oci_client_config).with_rekor_pub_key;
+    */
+
+    Ok(())
 }
