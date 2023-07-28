@@ -26,10 +26,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Sign,
-    SignBundle,
-    Verify,
-    VerifyBundle,
+    Sign(Sign),
+    SignBundle(SignBundle),
+    Verify(Verify),
+    VerifyBundle(VerifyBundle),
 }
 
 #[derive(Parser, Debug)]
