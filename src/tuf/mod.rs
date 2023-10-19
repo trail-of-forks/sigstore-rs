@@ -137,8 +137,6 @@ impl SigstoreRepository {
                 local_path.as_ref(),
             )?;
 
-            println!("data:\n{}", String::from_utf8_lossy(&data));
-
             Ok(serde_json::from_slice(&data[..]).unwrap())
         }
 

@@ -50,6 +50,9 @@ pub enum VerificationError {
 
     #[error("Failed to verify that the signature corresponds to the input")]
     SignatureVerificationFailure,
+
+    #[error("{0}")]
+    PolicyFailure(String),
 }
 pub type VerificationResult = Result<(), VerificationError>;
 

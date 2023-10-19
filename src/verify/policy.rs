@@ -12,13 +12,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use const_oid::{AssociatedOid, ObjectIdentifier};
+//! https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md#extension-values
+
+use const_oid::ObjectIdentifier;
+use x509_cert::ext::pkix::{name::GeneralName, SubjectAltName};
+
+use crate::verify::VerificationError;
 
 use super::models::VerificationResult;
 
 macro_rules! oids {
     ($($name:ident = $value:literal),+) => {
         $(const $name: ObjectIdentifier = ObjectIdentifier::new_unwrap($value);)+
+    };
+}
+
+macro_rules! impl_policy {
+    ($policy:ident, $oid:expr) => {
+        pub struct $policy {
+            val: String,
+        }
+
+        impl const_oid::AssociatedOid for $policy {
+            const OID: ObjectIdentifier = $oid;
+        }
+
+        impl SingleX509ExtPolicy for $policy {
+            fn new<S: AsRef<str>>(val: S) -> Self {
+                Self {
+                    val: val.as_ref().to_owned(),
+                }
+            }
+
+            fn name() -> &'static str {
+                stringify!($policy)
+            }
+
+            fn value(&self) -> &str {
+                &self.val
+            }
+        }
     };
 }
 
@@ -33,38 +66,126 @@ oids! {
 
 }
 
-trait SingleX509ExtPolicy {
-    //const OID: [u8] = [];
+pub trait SingleX509ExtPolicy {
+    fn new<S: AsRef<str>>(val: S) -> Self;
+    fn name() -> &'static str;
+    fn value(&self) -> &str;
 }
 
-impl<T: SingleX509ExtPolicy> VerificationPolicy for T {
+impl<T: SingleX509ExtPolicy + const_oid::AssociatedOid> VerificationPolicy for T {
     fn verify(&self, cert: &x509_cert::Certificate) -> VerificationResult {
-        todo!()
+        let extensions = cert.tbs_certificate.extensions.as_deref().unwrap_or(&[]);
+        let mut extensions = extensions.iter().filter(|ext| ext.extn_id == T::OID);
+
+        // Check for exactly one extension.
+        let (Some(ext), None) = (extensions.next(), extensions.next()) else {
+            return Err(VerificationError::PolicyFailure(
+                "Cannot get policy extensions from certificate".into(),
+            ));
+        };
+
+        // Parse raw string without DER encoding.
+        let val = std::str::from_utf8(ext.extn_value.as_bytes()).unwrap();
+
+        return if val != self.value() {
+            Err(VerificationError::PolicyFailure(format!(
+                "Certificate's {} does not match (got {}, expected {})",
+                T::name(),
+                val,
+                self.value()
+            )))
+        } else {
+            Ok(())
+        };
     }
 }
 
-// This would be nice:
-/*
-impl<T: SingleX509ExtPolicy> AssociatedOid for T {
-    const OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("s");
-}
-*/
-// But unfortunately it breaks orphan rules.
-
-// TODO(tnytown): Policies.
-pub struct OIDCIssuer;
-pub struct GitHubWorkflowTrigger;
-pub struct GitHubWorkflowSHA;
-pub struct GitHubWorkflowName;
-pub struct GitHubWorkflowRepository;
-pub struct GitHubWorkflowRef;
+impl_policy!(OIDCIssuer, OIDC_ISSUER_OID);
+impl_policy!(GitHubWorkflowTrigger, OIDC_GITHUB_WORKFLOW_TRIGGER_OID);
+impl_policy!(GitHubWorkflowSHA, OIDC_GITHUB_WORKFLOW_SHA_OID);
+impl_policy!(GitHubWorkflowName, OIDC_GITHUB_WORKFLOW_NAME_OID);
+impl_policy!(
+    GitHubWorkflowRepository,
+    OIDC_GITHUB_WORKFLOW_REPOSITORY_OID
+);
+impl_policy!(GitHubWorkflowRef, OIDC_GITHUB_WORKFLOW_REF_OID);
 
 pub trait VerificationPolicy {
     fn verify(&self, cert: &x509_cert::Certificate) -> VerificationResult;
 }
 
-pub struct AnyOf;
-pub struct AllOf;
+pub struct AnyOf<'a> {
+    children: Vec<&'a dyn VerificationPolicy>,
+}
+
+impl<'a> AnyOf<'a> {
+    pub fn new<I: IntoIterator<Item = &'a dyn VerificationPolicy>>(policies: I) -> Self {
+        Self {
+            children: policies.into_iter().collect(),
+        }
+    }
+}
+
+impl VerificationPolicy for AnyOf<'_> {
+    fn verify(&self, cert: &x509_cert::Certificate) -> VerificationResult {
+        let ok = self
+            .children
+            .iter()
+            .find(|policy| policy.verify(cert).is_ok());
+
+        return if let Some(_) = ok {
+            Ok(())
+        } else {
+            Err(VerificationError::PolicyFailure(format!(
+                "0 of {} policies succeeded",
+                self.children.len()
+            )))
+        };
+    }
+}
+
+pub struct AllOf<'a> {
+    children: Vec<&'a dyn VerificationPolicy>,
+}
+
+impl<'a> AllOf<'a> {
+    pub fn new<I: IntoIterator<Item = &'a dyn VerificationPolicy>>(policies: I) -> Self {
+        Self {
+            children: policies.into_iter().collect(),
+        }
+    }
+}
+
+impl VerificationPolicy for AllOf<'_> {
+    fn verify(&self, cert: &x509_cert::Certificate) -> VerificationResult {
+        // Without this, we'd consider empty lists of child policies trivially valid.
+        // This is almost certainly not what the user wants and is a potential
+        // source of API misuse, so we explicitly disallow it.
+        if self.children.len() < 1 {
+            return Err(VerificationError::PolicyFailure(
+                "no child policies to verify".into(),
+            ));
+        }
+
+        let results = self.children.iter().map(|policy| policy.verify(cert));
+        let failures: Vec<_> = results
+            .filter_map(|result| result.err())
+            .map(|err| err.to_string())
+            .collect();
+
+        return if failures.len() == 0 {
+            Ok(())
+        } else {
+            Err(VerificationError::PolicyFailure(format!(
+                "{} of {} policies failed:\n- {}",
+                failures.len(),
+                self.children.len(),
+                failures.join("\n- ")
+            )))
+        };
+    }
+}
+
 pub struct UnsafeNoOp;
 
 impl VerificationPolicy for UnsafeNoOp {
@@ -74,4 +195,56 @@ impl VerificationPolicy for UnsafeNoOp {
     }
 }
 
-pub struct Identity;
+pub struct Identity {
+    identity: String,
+    issuer: OIDCIssuer,
+}
+
+impl Identity {
+    pub fn new<A, B>(identity: A, issuer: B) -> Self
+    where
+        A: AsRef<str>,
+        B: AsRef<str>,
+    {
+        Self {
+            identity: identity.as_ref().to_owned(),
+            issuer: OIDCIssuer::new(issuer),
+        }
+    }
+}
+
+impl VerificationPolicy for Identity {
+    fn verify(&self, cert: &x509_cert::Certificate) -> VerificationResult {
+        if let err @ Err(_) = self.issuer.verify(cert) {
+            return err;
+        }
+
+        let (_, san): (bool, SubjectAltName) = cert
+            .tbs_certificate
+            .get()
+            .unwrap()
+            .ok_or(VerificationError::PolicyFailure("stuff".into()))?;
+        let names: Vec<_> = san
+            .0
+            .iter()
+            .filter_map(|name| match name {
+                GeneralName::Rfc822Name(name) => Some(name.as_str()),
+                GeneralName::UniformResourceIdentifier(name) => Some(name.as_str()),
+                GeneralName::OtherName(name) if name.type_id == OTHERNAME_OID => {
+                    std::str::from_utf8(name.value.value()).ok()
+                }
+                _ => None,
+            })
+            .collect();
+
+        return if names.contains(&self.identity.as_str()) {
+            Ok(())
+        } else {
+            Err(VerificationError::PolicyFailure(format!(
+                "Certificate's SANs do not match {}; actual SANs: {}",
+                self.identity,
+                names.join(", ")
+            )))
+        };
+    }
+}

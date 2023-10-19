@@ -21,7 +21,6 @@ use std::{fs, process::exit};
 use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use sigstore::{
-    errors::SigstoreError,
     oauth::IdentityToken,
     sign::SigningContext,
     verify::VerificationMaterials,
@@ -164,10 +163,14 @@ fn verify_bundle(args: VerifyBundle) -> anyhow::Result<()> {
 
     let bundle: sigstore::Bundle = serde_json::from_reader(bundle)?;
     let materials = VerificationMaterials::from_bundle(&mut artifact, bundle, true)
-        .ok_or(anyhow!("unable to construct VerificationMaterials"))?;
+        .ok_or(anyhow!("Unable to construct VerificationMaterials"))?;
 
     let verifier = Verifier::production()?;
-    verifier.verify(materials, &policy::UnsafeNoOp)?;
+
+    verifier.verify(
+        materials,
+        &policy::Identity::new(certificate_identity, certificate_oidc_issuer),
+    )?;
 
     Ok(())
 }
