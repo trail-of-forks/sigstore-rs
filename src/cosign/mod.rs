@@ -282,6 +282,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rustls_pki_types::CertificateDer;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -335,18 +336,15 @@ TNMea7Ix/stJ5TfcLLeABLE4BNJOsQ4vnBHJ
     #[cfg(feature = "test-registry")]
     const SIGNED_IMAGE: &str = "busybox:1.34";
 
-    pub(crate) fn get_fulcio_cert_pool() -> CertificatePool {
-        let certificates = vec![
-            crate::registry::Certificate {
-                encoding: crate::registry::CertificateEncoding::Pem,
-                data: FULCIO_CRT_1_PEM.as_bytes().to_vec(),
-            },
-            crate::registry::Certificate {
-                encoding: crate::registry::CertificateEncoding::Pem,
-                data: FULCIO_CRT_2_PEM.as_bytes().to_vec(),
-            },
-        ];
-        CertificatePool::from_certificates(&certificates).unwrap()
+    pub(crate) fn get_fulcio_cert_pool() -> CertificatePool<'static> {
+        fn pem_to_der<'a>(input: &'a str) -> CertificateDer<'a> {
+            let pem_cert = pem::parse(input).unwrap();
+            assert_eq!(pem_cert.tag(), "CERTIFICATE");
+            CertificateDer::from(pem_cert.into_contents())
+        }
+        let certificates = vec![pem_to_der(FULCIO_CRT_1_PEM), pem_to_der(FULCIO_CRT_2_PEM)];
+
+        CertificatePool::from_certificates(certificates, []).unwrap()
     }
 
     pub(crate) fn get_rekor_public_key() -> CosignVerificationKey {

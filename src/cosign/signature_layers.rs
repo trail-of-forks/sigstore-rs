@@ -899,8 +899,10 @@ JsB89BPhZYch0U0hKANx5TY+ncrm0s8bfJxxHoenAEFhwhuXeb4PqIrtoQ==
 
         let issued_cert_pem = issued_cert.cert.to_pem()?;
 
-        let certs = vec![crate::registry::Certificate::try_from(ca_data.cert).unwrap()];
-        let cert_pool = CertificatePool::from_certificates(&certs).unwrap();
+        let certs = vec![crate::registry::Certificate::try_from(ca_data.cert)
+            .unwrap()
+            .try_into()?];
+        let cert_pool = CertificatePool::from_certificates(certs, []).unwrap();
 
         let integrated_time = Utc::now().checked_sub_signed(Duration::minutes(1)).unwrap();
         let bundle = Bundle {
@@ -946,8 +948,10 @@ JsB89BPhZYch0U0hKANx5TY+ncrm0s8bfJxxHoenAEFhwhuXeb4PqIrtoQ==
 
         let issued_cert_pem = issued_cert.cert.to_pem()?;
 
-        let certs = vec![crate::registry::Certificate::try_from(ca_data.cert).unwrap()];
-        let cert_pool = CertificatePool::from_certificates(&certs).unwrap();
+        let certs = vec![crate::registry::Certificate::try_from(ca_data.cert)
+            .unwrap()
+            .try_into()?];
+        let cert_pool = CertificatePool::from_certificates(certs, []).unwrap();
 
         let integrated_time = Utc::now().checked_sub_signed(Duration::minutes(1)).unwrap();
         let bundle = Bundle {
@@ -992,8 +996,10 @@ JsB89BPhZYch0U0hKANx5TY+ncrm0s8bfJxxHoenAEFhwhuXeb4PqIrtoQ==
 
         let issued_cert_pem = issued_cert.cert.to_pem()?;
 
-        let certs = vec![crate::registry::Certificate::try_from(ca_data.cert).unwrap()];
-        let cert_pool = CertificatePool::from_certificates(&certs).unwrap();
+        let certs = vec![crate::registry::Certificate::try_from(ca_data.cert)
+            .unwrap()
+            .try_into()?];
+        let cert_pool = CertificatePool::from_certificates(certs, []).unwrap();
 
         let integrated_time = Utc::now().checked_sub_signed(Duration::minutes(1)).unwrap();
         let bundle = Bundle {
