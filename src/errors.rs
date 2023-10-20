@@ -109,6 +109,9 @@ pub enum SigstoreError {
     #[error("Certificate pool error: {0}")]
     CertificatePoolError(String),
 
+    #[error("Fulcio request unsuccessful: {0}")]
+    FulcioClientError(&'static str),
+
     #[error("Cannot fetch manifest of {image}: {error}")]
     RegistryFetchManifestError { image: String, error: String },
 
@@ -120,6 +123,9 @@ pub enum SigstoreError {
 
     #[error("Cannot push {image}: {error}")]
     RegistryPushError { image: String, error: String },
+
+    #[error(transparent)]
+    ReqwestError(#[from] reqwest::Error),
 
     #[error("OCI reference not valid: {reference}")]
     OciReferenceNotValidError { reference: String },
@@ -214,4 +220,7 @@ pub enum SigstoreError {
 
     #[error(transparent)]
     Ed25519PKCS8Error(#[from] ed25519_dalek::pkcs8::spki::Error),
+
+    #[error(transparent)]
+    X509ParseError(#[from] x509_cert::der::Error),
 }
