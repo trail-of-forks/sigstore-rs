@@ -146,6 +146,9 @@ pub enum SigstoreError {
     #[error("TUF target {0} not found inside of repository")]
     TufTargetNotFoundError(String),
 
+    #[error("{0}")]
+    TufMetadataError(&'static str),
+
     #[error(transparent)]
     IOError(#[from] std::io::Error),
 
