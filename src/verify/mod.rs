@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! This crate provides an API for verifying Sigstore bundles.
+//! Verifier for Sigstore bundles and associated types and policies.
 mod models;
 pub use models::{VerificationError, VerificationMaterials, VerificationResult};
 

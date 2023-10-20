@@ -42,6 +42,9 @@ pub enum VerificationError {
     #[error("Certificate expired before time of signing")]
     CertificateExpired,
 
+    #[error("Certificate malformed")]
+    CertificateMalformed,
+
     #[error("Failed to verify certificate")]
     CertificateVerificationFailure,
 

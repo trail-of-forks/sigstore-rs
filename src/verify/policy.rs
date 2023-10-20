@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md#extension-values
+//! Verifiers for certificate metadata.
+//!
+//! <https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md#extension-values>
 
 use const_oid::ObjectIdentifier;
 use x509_cert::ext::pkix::{name::GeneralName, SubjectAltName};
@@ -28,10 +30,9 @@ macro_rules! oids {
 }
 
 macro_rules! impl_policy {
-    ($policy:ident, $oid:expr) => {
-        pub struct $policy {
-            val: String,
-        }
+    ($policy:ident, $oid:expr, $doc:literal) => {
+        #[doc = $doc]
+        pub struct $policy(pub String);
 
         impl const_oid::AssociatedOid for $policy {
             const OID: ObjectIdentifier = $oid;
@@ -39,9 +40,7 @@ macro_rules! impl_policy {
 
         impl SingleX509ExtPolicy for $policy {
             fn new<S: AsRef<str>>(val: S) -> Self {
-                Self {
-                    val: val.as_ref().to_owned(),
-                }
+                Self(val.as_ref().to_owned())
             }
 
             fn name() -> &'static str {
@@ -49,7 +48,7 @@ macro_rules! impl_policy {
             }
 
             fn value(&self) -> &str {
-                &self.val
+                &self.0
             }
         }
     };
@@ -66,6 +65,7 @@ oids! {
 
 }
 
+/// A trait for policies that check a single textual value against a X.509 extension.
 pub trait SingleX509ExtPolicy {
     fn new<S: AsRef<str>>(val: S) -> Self;
     fn name() -> &'static str;
@@ -87,7 +87,7 @@ impl<T: SingleX509ExtPolicy + const_oid::AssociatedOid> VerificationPolicy for T
         // Parse raw string without DER encoding.
         let val = std::str::from_utf8(ext.extn_value.as_bytes()).unwrap();
 
-        return if val != self.value() {
+        if val != self.value() {
             Err(VerificationError::PolicyFailure(format!(
                 "Certificate's {} does not match (got {}, expected {})",
                 T::name(),
@@ -96,24 +96,54 @@ impl<T: SingleX509ExtPolicy + const_oid::AssociatedOid> VerificationPolicy for T
             )))
         } else {
             Ok(())
-        };
+        }
     }
 }
 
-impl_policy!(OIDCIssuer, OIDC_ISSUER_OID);
-impl_policy!(GitHubWorkflowTrigger, OIDC_GITHUB_WORKFLOW_TRIGGER_OID);
-impl_policy!(GitHubWorkflowSHA, OIDC_GITHUB_WORKFLOW_SHA_OID);
-impl_policy!(GitHubWorkflowName, OIDC_GITHUB_WORKFLOW_NAME_OID);
+impl_policy!(
+    OIDCIssuer,
+    OIDC_ISSUER_OID,
+    "Checks the certificate's OIDC issuer."
+);
+
+impl_policy!(
+    GitHubWorkflowTrigger,
+    OIDC_GITHUB_WORKFLOW_TRIGGER_OID,
+    "Checks the certificate's GitHub Actions workflow trigger."
+);
+
+impl_policy!(
+    GitHubWorkflowSHA,
+    OIDC_GITHUB_WORKFLOW_SHA_OID,
+    "Checks the certificate's GitHub Actions workflow commit SHA."
+);
+
+impl_policy!(
+    GitHubWorkflowName,
+    OIDC_GITHUB_WORKFLOW_NAME_OID,
+    "Checks the certificate's GitHub Actions workflow name."
+);
+
 impl_policy!(
     GitHubWorkflowRepository,
-    OIDC_GITHUB_WORKFLOW_REPOSITORY_OID
+    OIDC_GITHUB_WORKFLOW_REPOSITORY_OID,
+    "Checks the certificate's GitHub Actions workflow repository."
 );
-impl_policy!(GitHubWorkflowRef, OIDC_GITHUB_WORKFLOW_REF_OID);
 
+impl_policy!(
+    GitHubWorkflowRef,
+    OIDC_GITHUB_WORKFLOW_REF_OID,
+    "Checks the certificate's GitHub Actions workflow ref."
+);
+
+/// An interface that all policies must conform to.
 pub trait VerificationPolicy {
     fn verify(&self, cert: &x509_cert::Certificate) -> VerificationResult;
 }
 
+/// The "any of" policy, corresponding to a logical OR between child policies.
+///
+/// An empty list of child policies is considered trivially invalid.
 pub struct AnyOf<'a> {
     children: Vec<&'a dyn VerificationPolicy>,
 }
@@ -144,6 +174,9 @@ impl VerificationPolicy for AnyOf<'_> {
     }
 }
 
+/// The "all of" policy, corresponding to a logical AND between child policies.
+///
+/// An empty list of child policies is considered trivially invalid.
 pub struct AllOf<'a> {
     children: Vec<&'a dyn VerificationPolicy>,
 }
@@ -173,7 +206,7 @@ impl VerificationPolicy for AllOf<'_> {
             .map(|err| err.to_string())
             .collect();
 
-        return if failures.len() == 0 {
+        if failures.len() == 0 {
             Ok(())
         } else {
             Err(VerificationError::PolicyFailure(format!(
@@ -182,11 +215,11 @@ impl VerificationPolicy for AllOf<'_> {
                 self.children.len(),
                 failures.join("\n- ")
             )))
-        };
+        }
     }
 }
 
-pub struct UnsafeNoOp;
+pub(crate) struct UnsafeNoOp;
 
 impl VerificationPolicy for UnsafeNoOp {
     fn verify(&self, _cert: &x509_cert::Certificate) -> VerificationResult {
@@ -195,6 +228,11 @@ impl VerificationPolicy for UnsafeNoOp {
     }
 }
 
+/// Verifies the certificate's "identity", corresponding to the X.509v3 SAN.
+/// Identities are verified modulo an OIDC issuer, so the issuer's URI
+/// is also required.
+///
+/// Supported SAN types include emails, URIs, and Sigstore-specific "other names".
 pub struct Identity {
     identity: String,
     issuer: OIDCIssuer,
@@ -219,11 +257,11 @@ impl VerificationPolicy for Identity {
             return err;
         }
 
-        let (_, san): (bool, SubjectAltName) = cert
-            .tbs_certificate
-            .get()
-            .unwrap()
-            .ok_or(VerificationError::PolicyFailure("stuff".into()))?;
+        let (_, san): (bool, SubjectAltName) = match cert.tbs_certificate.get() {
+            Ok(Some(result)) => result,
+            _ => return Err(VerificationError::CertificateMalformed),
+        };
+
         let names: Vec<_> = san
             .0
             .iter()
@@ -237,7 +275,7 @@ impl VerificationPolicy for Identity {
             })
             .collect();
 
-        return if names.contains(&self.identity.as_str()) {
+        if names.contains(&self.identity.as_str()) {
             Ok(())
         } else {
             Err(VerificationError::PolicyFailure(format!(
@@ -245,6 +283,6 @@ impl VerificationPolicy for Identity {
                 self.identity,
                 names.join(", ")
             )))
-        };
+        }
     }
 }
