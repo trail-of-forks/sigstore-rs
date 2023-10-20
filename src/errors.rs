@@ -70,6 +70,9 @@ pub enum SigstoreError {
     #[error("Public key verification error")]
     PublicKeyVerificationError,
 
+    #[error("X.509 certificate version is not V3")]
+    CertificateUnsupportedVersionError,
+
     #[error("Certificate validity check failed: cannot be used before {0}")]
     CertificateValidityError(String),
 
