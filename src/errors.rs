@@ -52,6 +52,9 @@ pub enum SigstoreError {
     #[error("invalid key format: {error}")]
     InvalidKeyFormat { error: String },
 
+    #[error("Unable to parse identity token: {0}")]
+    IdentityTokenError(&'static str),
+
     #[error("unmatched key type {key_typ} and signing scheme {scheme}")]
     UnmatchedKeyAndSigningScheme { key_typ: String, scheme: String },
 
