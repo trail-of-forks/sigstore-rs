@@ -52,6 +52,7 @@ use super::errors::{Result, SigstoreError};
 pub trait Repository {
     fn fulcio_certs(&self) -> Result<Vec<CertificateDer>>;
     fn rekor_keys(&self) -> Result<Vec<&[u8]>>;
+    fn ctfe_keys(&self) -> Result<Vec<&[u8]>>;
 }
 
 /// A `ManualRepository` is a [Repository] with out-of-band trust materials.
@@ -75,6 +76,10 @@ impl Repository for ManualRepository<'_> {
             Some(key) => vec![&key[..]],
             None => Vec::new(),
         })
+    }
+
+    fn ctfe_keys(&self) -> Result<Vec<&[u8]>> {
+        todo!()
     }
 }
 
@@ -261,6 +266,26 @@ impl Repository for SigstoreRepository {
         if keys.len() != 1 {
             Err(SigstoreError::TufMetadataError(
                 "Did not find exactly 1 active Rekor key".into(),
+            ))
+        } else {
+            Ok(keys)
+        }
+    }
+
+    /// Fetch CTFE public keys from the given TUF repository or reuse
+    /// the local cache if it's not outdated.
+    ///
+    /// The contents of the local cache are updated when they are outdated.
+    ///
+    /// **Warning:** this method needs special handling when invoked from
+    /// an async function because it performs blocking operations.
+    fn ctfe_keys(&self) -> Result<Vec<&[u8]>> {
+        let root = self.trusted_root()?;
+        let keys: Vec<_> = Self::tlog_keys(&root.ctlogs).collect();
+
+        if keys.is_empty() {
+            Err(SigstoreError::TufMetadataError(
+                "CTFE keys not found".into(),
             ))
         } else {
             Ok(keys)

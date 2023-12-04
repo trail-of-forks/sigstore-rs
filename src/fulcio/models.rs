@@ -14,13 +14,17 @@
 
 //! Models for interfacing with Fulcio.
 //!
-//! https://github.com/sigstore/fulcio/blob/9da27be4fb64b85c907ab9ddd8a5d3cbd38041d4/fulcio.proto
+//! <https://github.com/sigstore/fulcio/blob/9da27be4fb64b85c907ab9ddd8a5d3cbd38041d4/fulcio.proto>
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STD_ENGINE, Engine as _};
 use pem::Pem;
 use pkcs8::der::EncodePem;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_repr::Deserialize_repr;
+use serde_with::{
+    base64::{Base64, Standard},
+    formats::Padded,
+    serde_as, DeserializeAs, SerializeAs,
+};
 use x509_cert::Certificate;
 
 fn serialize_x509_csr<S>(
@@ -33,28 +37,15 @@ where
     let encoded = input
         .to_pem(pkcs8::LineEnding::CRLF)
         .map_err(serde::ser::Error::custom)?;
-    let encoded = BASE64_STD_ENGINE.encode(encoded);
 
-    ser.serialize_str(&encoded)
-}
-
-fn deserialize_base64<'de, D>(de: D) -> std::result::Result<Vec<u8>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let buf: &str = Deserialize::deserialize(de)?;
-
-    BASE64_STD_ENGINE
-        .decode(buf)
-        .map_err(serde::de::Error::custom)
+    Base64::<Standard, Padded>::serialize_as(&encoded, ser)
 }
 
 fn deserialize_inner_detached_sct<'de, D>(de: D) -> std::result::Result<InnerDetachedSCT, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let buf = deserialize_base64(de)?;
-
+    let buf: Vec<u8> = Base64::<Standard, Padded>::deserialize_as(de)?;
     serde_json::from_slice(&buf).map_err(serde::de::Error::custom)
 }
 
@@ -72,7 +63,7 @@ pub enum SigningCertificate {
     SignedCertificateEmbeddedSct(SigningCertificateEmbeddedSCT),
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SigningCertificateDetachedSCT {
     pub chain: CertificateChain,
@@ -86,31 +77,34 @@ pub struct SigningCertificateEmbeddedSCT {
     pub chain: CertificateChain,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct CertificateChain {
     pub certificates: Vec<Pem>,
 }
 
-#[derive(Deserialize)]
+#[serde_as]
+#[derive(Deserialize, Debug, Clone)]
 pub struct InnerDetachedSCT {
     pub sct_version: SCTVersion,
-    #[serde(deserialize_with = "deserialize_base64")]
-    pub id: Vec<u8>,
+    #[serde_as(as = "Base64")]
+    pub id: [u8; 32],
     pub timestamp: u64,
-    #[serde(deserialize_with = "deserialize_base64")]
+    #[serde_as(as = "Base64")]
     pub signature: Vec<u8>,
-    #[serde(deserialize_with = "deserialize_base64")]
+    #[serde_as(as = "Base64")]
     pub extensions: Vec<u8>,
 }
 
-#[derive(Deserialize_repr, PartialEq, Debug)]
+#[derive(Deserialize_repr, PartialEq, Debug, Clone)]
 #[repr(u8)]
 pub enum SCTVersion {
     V1 = 0,
 }
 
+// TODO(tnytown): Make this type prettier. SigningCertificateDetachedSCT duplicates most of the data
+// in cert and chain.
 pub struct CertificateResponse {
     pub cert: Certificate,
     pub chain: Vec<Certificate>,
-    // pub sct: InnerDetachedSCT,
+    pub detached_sct: Option<SigningCertificateDetachedSCT>,
 }

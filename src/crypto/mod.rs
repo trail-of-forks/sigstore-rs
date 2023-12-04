@@ -178,7 +178,7 @@ pub(crate) mod certificate;
 #[cfg(feature = "cert")]
 pub(crate) mod certificate_pool;
 #[cfg(feature = "cert")]
-pub(crate) use certificate_pool::CertificatePool;
+pub(crate) mod keyring;
 
 pub mod verification_key;
 
@@ -189,6 +189,9 @@ use self::signing_key::{
 };
 
 pub mod signing_key;
+
+#[cfg(feature = "sign")]
+pub(crate) mod transparency;
 
 #[cfg(test)]
 pub(crate) mod tests {

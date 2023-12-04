@@ -136,6 +136,12 @@ pub enum SigstoreError {
     #[error(transparent)]
     JoinError(#[from] tokio::task::JoinError),
 
+    #[error(transparent)]
+    KeyringError(#[from] crate::crypto::keyring::KeyringError),
+
+    #[error(transparent)]
+    SCTError(#[from] crate::crypto::transparency::SCTError),
+
     #[cfg(feature = "sign")]
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
