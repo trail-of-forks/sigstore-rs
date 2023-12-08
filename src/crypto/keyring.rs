@@ -66,7 +66,7 @@ impl Key {
             // TODO(tnytown): should we also accept ed25519, p384, ... ?
             (ID_EC_PUBLIC_KEY, SECP_256_R_1) => Ok(Key {
                 inner: UnparsedPublicKey::new(
-                    &ring_signature::ECDSA_P256_SHA256_FIXED,
+                    &ring_signature::ECDSA_P256_SHA256_ASN1,
                     spki.subject_public_key.raw_bytes().to_owned(),
                 ),
                 fingerprint: {

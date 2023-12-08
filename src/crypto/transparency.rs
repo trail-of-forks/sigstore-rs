@@ -111,6 +111,46 @@ impl From<x509_cert::ext::pkix::Error> for SCTError {
     }
 }
 
+#[derive(Eq, PartialEq, Debug)]
+struct TlsByteVecU24 {
+    vec: Vec<u8>,
+}
+
+impl From<&[u8]> for TlsByteVecU24 {
+    fn from(value: &[u8]) -> Self {
+        Self {
+            vec: Vec::from(value),
+        }
+    }
+}
+
+impl tls_codec::Size for TlsByteVecU24 {
+    fn tls_serialized_len(&self) -> usize {
+        self.vec.len() + 3
+    }
+}
+
+impl SerializeBytes for TlsByteVecU24 {
+    fn tls_serialize(&self) -> Result<Vec<u8>, tls_codec::Error> {
+        let (tls_serialized_len, byte_len) = (self.tls_serialized_len(), self.vec.len());
+        let max_len = (1 << 24) as usize;
+        if self.vec.len() > max_len {
+            return Err(tls_codec::Error::InvalidVectorLength);
+        }
+
+        let mut vec = Vec::with_capacity(tls_serialized_len);
+
+        // write the 3 least significant bytes.
+        let len_bytes = byte_len.to_be_bytes();
+        vec.extend(&len_bytes[5..]);
+
+        // write the content bytes.
+        vec.extend_from_slice(&self.vec);
+
+        Ok(vec)
+    }
+}
+
 #[derive(PartialEq, Debug, TlsSerializeBytes, TlsSize)]
 #[repr(u8)]
 enum SignatureType {
@@ -119,7 +159,7 @@ enum SignatureType {
 }
 
 #[derive(PartialEq, Debug)]
-#[repr(u8)]
+#[repr(u16)]
 enum LogEntryType {
     X509Entry = 0,
     PrecertEntry = 1,
@@ -128,17 +168,17 @@ enum LogEntryType {
 #[derive(PartialEq, Debug, TlsSerializeBytes, TlsSize)]
 struct PreCert {
     // opaque issuer_key_hash[32];
-    issuer_key_hash: TlsByteVecU8,
+    issuer_key_hash: [u8; 32],
     // opaque TBSCertificate<1..2^24-1>;
-    tbs_certificate: TlsByteVecU32,
+    tbs_certificate: TlsByteVecU24,
 }
 
 #[derive(PartialEq, Debug, TlsSerializeBytes, TlsSize)]
-#[repr(u8)]
+#[repr(u16)]
 enum SignedEntry {
     // opaque ASN.1Cert<1..2^24-1>;
     #[tls_codec(discriminant = "LogEntryType::X509Entry")]
-    X509Entry(TlsByteVecU32),
+    X509Entry(TlsByteVecU24),
     #[tls_codec(discriminant = "LogEntryType::PrecertEntry")]
     PrecertEntry(PreCert),
 }
@@ -210,7 +250,7 @@ impl From<&CertificateEmbeddedSCT> for DigitallySigned {
         tbs_precert.extensions = tbs_precert.extensions.map(|exts| {
             exts.iter()
                 .filter(|v| v.extn_id != CT_PRECERT_SCTS)
-                .map(|v| v.clone())
+                .cloned()
                 .collect()
         });
 
@@ -222,12 +262,15 @@ impl From<&CertificateEmbeddedSCT> for DigitallySigned {
             .expect("failed to re-encode Precertificate!");
 
         DigitallySigned {
-            version: Version::V1,
+            // TODO(tnytown): Why does this not implement Copy?
+            version: match value.sct.version {
+                Version::V1 => Version::V1,
+            },
             signature_type: SignatureType::CertificateTimestamp,
             timestamp: value.sct.timestamp,
             signed_entry: SignedEntry::PrecertEntry(PreCert {
-                issuer_key_hash: value.issuer_id.to_vec().into(),
-                tbs_certificate: tbs_precert_der.into(),
+                issuer_key_hash: value.issuer_id,
+                tbs_certificate: tbs_precert_der.as_slice().into(),
             }),
             extensions: value.sct.extensions.clone().into(),
 
