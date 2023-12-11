@@ -270,7 +270,7 @@ impl From<&CertificateEmbeddedSCT> for DigitallySigned {
                 issuer_key_hash: value.issuer_id,
                 tbs_certificate: tbs_precert_der.as_slice().into(),
             }),
-            extensions: value.sct.extensions.clone().into(),
+            extensions: value.sct.extensions.clone(),
 
             log_id: value.sct.log_id.key_id,
             signature: value.sct.signature.signature.clone().into(),
