@@ -16,9 +16,7 @@
 
 use const_oid::ObjectIdentifier;
 use digest::Digest;
-use tls_codec::{
-    SerializeBytes, TlsByteVecU16, TlsByteVecU32, TlsByteVecU8, TlsSerializeBytes, TlsSize,
-};
+use tls_codec::{SerializeBytes, Size, TlsByteVecU16, TlsSerializeBytes, TlsSize};
 use x509_cert::{
     der,
     der::Encode,
@@ -124,7 +122,7 @@ impl From<&[u8]> for TlsByteVecU24 {
     }
 }
 
-impl tls_codec::Size for TlsByteVecU24 {
+impl Size for TlsByteVecU24 {
     fn tls_serialized_len(&self) -> usize {
         self.vec.len() + 3
     }
