@@ -15,11 +15,8 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STD_ENGINE, Engine as _};
 use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, RSA_ENCRYPTION};
-use rsa::pkcs1v15;
-use ring_compat::{
-    pkcs8::DecodePublicKey as ED25519DecodePublicKey,
-    signature::{ecdsa, ed25519},
-};
+use ed25519::pkcs8::DecodePublicKey as ED25519DecodePublicKey;
+use rsa::{pkcs1v15, pss};
 use sha2::{Digest, Sha256, Sha384};
 use signature::{DigestVerifier, Verifier};
 use std::convert::TryFrom;
@@ -59,7 +56,7 @@ pub enum CosignVerificationKey {
     RSA_PKCS1_SHA512(pkcs1v15::VerifyingKey<sha2::Sha512>),
     ECDSA_P256_SHA256_ASN1(ecdsa::VerifyingKey<p256::NistP256>),
     ECDSA_P384_SHA384_ASN1(ecdsa::VerifyingKey<p384::NistP384>),
-    ED25519(ed25519::VerifyingKey),
+    ED25519(ed25519_dalek::VerifyingKey),
 }
 
 /// Attempts to convert a [x509 Subject Public Key Info](x509_cert::spki::SubjectPublicKeyInfo) object into

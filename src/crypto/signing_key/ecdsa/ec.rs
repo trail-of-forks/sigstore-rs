@@ -73,8 +73,7 @@ use digest::{
     },
     Digest, FixedOutput, FixedOutputReset,
 };
-use ring_compat::
-use ring_compat::signature::ecdsa::{
+use ecdsa::{
     hazmat::{DigestPrimitive, SignPrimitive},
     PrimeCurve, SignatureSize, SigningKey,
 };

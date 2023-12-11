@@ -41,7 +41,7 @@
 
 use std::convert::TryFrom;
 
-use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
+use pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use rsa::{
     pkcs1::DecodeRsaPrivateKey, pkcs1v15::SigningKey, pss::BlindedSigningKey, RsaPrivateKey,
     RsaPublicKey,

@@ -30,6 +30,7 @@ use super::Constraint;
 /// Sign the [`SignatureLayer`] with the given [`SigStoreSigner`].
 /// This constraint must be the last one to applied to a [`SignatureLayer`],
 /// since all the plaintext is defined.
+#[derive(Debug)]
 pub struct PrivateKeySigner {
     key: SigStoreSigner,
 }

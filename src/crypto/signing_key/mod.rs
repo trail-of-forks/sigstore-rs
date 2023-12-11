@@ -307,6 +307,7 @@ pub trait Signer {
     fn sign(&self, msg: &[u8]) -> Result<Vec<u8>>;
 }
 
+#[derive(Debug)]
 #[allow(non_camel_case_types)]
 pub enum SigStoreSigner {
     RSA_PSS_SHA256(RSASigner),
