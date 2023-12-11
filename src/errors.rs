@@ -15,6 +15,10 @@
 
 //! The errors that can be raised by sigstore-rs
 
+use ring_compat::{
+    pkcs1,
+    signature::{ecdsa, ed25519},
+};
 use thiserror::Error;
 
 #[cfg(feature = "cosign")]
@@ -42,6 +46,9 @@ pub type Result<T> = std::result::Result<T, SigstoreError>;
 pub enum SigstoreError {
     #[error("failed to parse URL: {0}")]
     UrlParseError(#[from] url::ParseError),
+
+    #[error("fuck")]
+    FuckError(#[from] ed25519::Error),
 
     #[error("failed to construct redirect URL")]
     RedirectUrlRequestLineError,
@@ -177,12 +184,6 @@ pub enum SigstoreError {
     PKCS8DerError(String),
 
     #[error(transparent)]
-    ECDSAError(#[from] ecdsa::Error),
-
-    #[error(transparent)]
-    ECError(#[from] elliptic_curve::Error),
-
-    #[error(transparent)]
     ScryptKDFInvalidParamsError(#[from] scrypt::errors::InvalidParams),
 
     #[error(transparent)]
@@ -205,13 +206,4 @@ pub enum SigstoreError {
 
     #[error("Failed to parse the key: {0}")]
     KeyParseError(String),
-
-    #[error(transparent)]
-    RSAError(#[from] rsa::errors::Error),
-
-    #[error(transparent)]
-    PKCS1Error(#[from] pkcs1::Error),
-
-    #[error(transparent)]
-    Ed25519PKCS8Error(#[from] ed25519_dalek::pkcs8::spki::Error),
 }
