@@ -60,11 +60,14 @@
 //! assert!(verification_key.verify_signature(Signature::Raw(&signature),message).is_ok());
 //! ```
 
-use ed25519::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey};
 use std::convert::TryFrom;
 
-use ed25519::KeypairBytes;
-use ed25519_dalek::{Signer as _, SigningKey};
+// use ed25519::KeypairBytes;
+// use ed25519_dalek::{Signer as _, SigningKey};
+use ring_compat::{
+    pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
+    signature::ed25519::{self, SigningKey},
+};
 
 use crate::{
     crypto::{verification_key::CosignVerificationKey, SigningScheme},
@@ -78,8 +81,8 @@ use super::{
 
 #[derive(Debug, Clone)]
 pub struct Ed25519Keys {
-    signing_key: ed25519_dalek::SigningKey,
-    verifying_key: ed25519_dalek::VerifyingKey,
+    signing_key: ed25519::SigningKey,
+    verifying_key: ed25519::VerifyingKey,
 }
 
 impl Ed25519Keys {
@@ -110,10 +113,9 @@ impl Ed25519Keys {
         match key.tag() {
             COSIGN_PRIVATE_KEY_PEM_LABEL | SIGSTORE_PRIVATE_KEY_PEM_LABEL => {
                 let der = kdf::decrypt(key.contents(), password)?;
-                let pkcs8 =
-                    ed25519_dalek::pkcs8::PrivateKeyInfo::try_from(&der[..]).map_err(|e| {
-                        SigstoreError::PKCS8Error(format!("Read PrivateKeyInfo failed: {e}"))
-                    })?;
+                let pkcs8 = ed25519::pkcs8::PrivateKeyInfo::try_from(&der[..]).map_err(|e| {
+                    SigstoreError::PKCS8Error(format!("Read PrivateKeyInfo failed: {e}"))
+                })?;
                 let key_pair_bytes = KeypairBytes::try_from(pkcs8).map_err(|e| {
                     SigstoreError::PKCS8Error(format!(
                         "Convert from pkcs8 pem to ed25519 private key failed: {e}"
@@ -136,8 +138,8 @@ impl Ed25519Keys {
 
         match label {
             PRIVATE_KEY_PEM_LABEL => {
-                let pkcs8 = ed25519_dalek::pkcs8::PrivateKeyInfo::try_from(document.as_bytes())
-                    .map_err(|e| {
+                let pkcs8 =
+                    ed25519::pkcs8::PrivateKeyInfo::try_from(document.as_bytes()).map_err(|e| {
                         SigstoreError::PKCS8Error(format!("Read PrivateKeyInfo failed: {e}"))
                     })?;
                 let key_pair_bytes = KeypairBytes::try_from(pkcs8).map_err(|e| {
@@ -166,7 +168,7 @@ impl Ed25519Keys {
 
     /// Builds a `Ed25519Keys` from a `KeypairBytes`.
     fn from_key_pair_bytes(key_pair_bytes: KeypairBytes) -> Result<Self> {
-        let signing_key = ed25519_dalek::SigningKey::from_keypair_bytes(
+        let signing_key = ed25519::SigningKey::from_keypair_bytes(
             &key_pair_bytes.to_bytes().ok_or_else(|| {
                 SigstoreError::PKCS8SpkiError("No public key info in given key_pair_bytes.".into())
             })?,
