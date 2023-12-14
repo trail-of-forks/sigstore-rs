@@ -49,6 +49,24 @@ where
     serde_json::from_slice(&buf).map_err(serde::de::Error::custom)
 }
 
+fn deserialize_inner_detached_sct_signature<'de, D>(de: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let buf: Vec<u8> = Base64::<Standard, Padded>::deserialize_as(de)?;
+
+    // The first two bytes indicate the signature and hash algorithms so let's skip those.
+    // The next two bytes indicate the size of the signature.
+    let signature_size = u16::from_be_bytes(buf[2..4].try_into().expect("unexpected length"));
+
+    // This should be equal to the length of the remainder of the signature buffer.
+    let signature = buf[4..].to_vec();
+    if signature_size as usize != signature.len() {
+        return Err(serde::de::Error::custom("signature size mismatch"));
+    }
+    Ok(signature)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSigningCertificateRequest {
@@ -89,7 +107,7 @@ pub struct InnerDetachedSCT {
     #[serde_as(as = "Base64")]
     pub id: [u8; 32],
     pub timestamp: u64,
-    #[serde_as(as = "Base64")]
+    #[serde(deserialize_with = "deserialize_inner_detached_sct_signature")]
     pub signature: Vec<u8>,
     #[serde_as(as = "Base64")]
     pub extensions: Vec<u8>,
