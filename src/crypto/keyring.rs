@@ -106,3 +106,60 @@ impl Keyring {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Keyring;
+    use crate::crypto::signing_key::ecdsa::{ECDSAKeys, EllipticCurve};
+    use digest::Digest;
+    use std::io::Write;
+
+    #[test]
+    fn verify_keyring() {
+        let message = b"some message";
+
+        // Create a key pair and a keyring containing the public key.
+        let key_pair = ECDSAKeys::new(EllipticCurve::P256).unwrap();
+        let signer = key_pair.to_sigstore_signer().unwrap();
+        let pub_key = key_pair.as_inner().public_key_to_der().unwrap();
+        let keyring = Keyring::new([pub_key.as_slice()]).unwrap();
+
+        // Generate the signature.
+        let signature = signer.sign(message).unwrap();
+
+        // Generate the key id.
+        let mut hasher = sha2::Sha256::new();
+        hasher.write(pub_key.as_slice()).unwrap();
+        let key_id: [u8; 32] = hasher.finalize().into();
+
+        // Check for success.
+        assert!(keyring
+            .verify(&key_id, signature.as_slice(), message)
+            .is_ok());
+
+        // Check for failure with incorrect key id.
+        assert!(keyring
+            .verify(&[0; 32], signature.as_slice(), message)
+            .is_err());
+
+        // Check for failure with incorrect payload.
+        let incorrect_message = b"another message";
+
+        assert!(keyring
+            .verify(&key_id, signature.as_slice(), incorrect_message)
+            .is_err());
+
+        // Check for failure with incorrect keyring.
+        let incorrect_key_pair = ECDSAKeys::new(EllipticCurve::P256).unwrap();
+        let incorrect_keyring = Keyring::new([incorrect_key_pair
+            .as_inner()
+            .public_key_to_der()
+            .unwrap()
+            .as_slice()])
+        .unwrap();
+
+        assert!(incorrect_keyring
+            .verify(&key_id, signature.as_slice(), message)
+            .is_err());
+    }
+}
