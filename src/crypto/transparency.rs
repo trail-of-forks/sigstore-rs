@@ -16,7 +16,7 @@
 
 use const_oid::ObjectIdentifier;
 use digest::Digest;
-use tls_codec::{SerializeBytes, Size, TlsByteVecU16, TlsSerializeBytes, TlsSize};
+use tls_codec::{SerializeBytes, TlsByteVecU16, TlsByteVecU24, TlsSerializeBytes, TlsSize};
 use x509_cert::{
     der,
     der::Encode,
@@ -30,20 +30,6 @@ use x509_cert::{
 use crate::fulcio::models::SigningCertificateDetachedSCT;
 
 use super::keyring::{Keyring, KeyringError};
-
-/*
-          digitally-signed struct {
-              Version sct_version;
-              SignatureType signature_type = certificate_timestamp;
-              uint64 timestamp;
-              LogEntryType entry_type;
-              select(entry_type) {
-                  case x509_entry: ASN.1Cert;
-                  case precert_entry: PreCert;
-              } signed_entry;
-             CtExtensions extensions;
-          };
-*/
 
 // TODO(tnytown): Migrate to const-oid's CT_PRECERT_SCTS when a new release is cut.
 const CT_PRECERT_SCTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.11129.2.4.2");
@@ -106,46 +92,6 @@ impl From<KeyringError> for SCTError {
 impl From<x509_cert::ext::pkix::Error> for SCTError {
     fn from(_value: x509_cert::ext::pkix::Error) -> Self {
         SCTError::SCTMalformed
-    }
-}
-
-#[derive(Eq, PartialEq, Debug)]
-struct TlsByteVecU24 {
-    vec: Vec<u8>,
-}
-
-impl From<&[u8]> for TlsByteVecU24 {
-    fn from(value: &[u8]) -> Self {
-        Self {
-            vec: Vec::from(value),
-        }
-    }
-}
-
-impl Size for TlsByteVecU24 {
-    fn tls_serialized_len(&self) -> usize {
-        self.vec.len() + 3
-    }
-}
-
-impl SerializeBytes for TlsByteVecU24 {
-    fn tls_serialize(&self) -> Result<Vec<u8>, tls_codec::Error> {
-        let (tls_serialized_len, byte_len) = (self.tls_serialized_len(), self.vec.len());
-        let max_len = (1 << 24) as usize;
-        if self.vec.len() > max_len {
-            return Err(tls_codec::Error::InvalidVectorLength);
-        }
-
-        let mut vec = Vec::with_capacity(tls_serialized_len);
-
-        // write the 3 least significant bytes.
-        let len_bytes = byte_len.to_be_bytes();
-        vec.extend(&len_bytes[5..]);
-
-        // write the content bytes.
-        vec.extend_from_slice(&self.vec);
-
-        Ok(vec)
     }
 }
 
@@ -295,12 +241,7 @@ impl From<&SigningCertificateDetachedSCT> for DigitallySigned {
     }
 }
 
-pub fn verify_sct(
-    sct: impl Into<DigitallySigned>,
-    // cert: x509_cert::Certificate,
-    // chain: impl IntoIterator<Item = x509_cert::Certificate>,
-    keyring: &Keyring,
-) -> Result<(), SCTError> {
+pub fn verify_sct(sct: impl Into<DigitallySigned>, keyring: &Keyring) -> Result<(), SCTError> {
     let sct: DigitallySigned = sct.into();
     let serialized = sct.tls_serialize().or(Err(SCTError::VerificationFailed(
         "unable to reconstruct SCT for signing",
