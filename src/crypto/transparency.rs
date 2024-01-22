@@ -46,7 +46,6 @@ fn cert_is_preissuer(cert: &Certificate) -> bool {
 }
 
 // <https://github.com/sigstore/sigstore-python/blob/main/sigstore/_internal/sct.py>
-// TODO(tnytown): verify that this approach is correct.
 fn find_issuer_cert(chain: &[Certificate]) -> Option<&Certificate> {
     let cert = if cert_is_preissuer(&chain[0]) {
         &chain[1]
@@ -59,7 +58,7 @@ fn find_issuer_cert(chain: &[Certificate]) -> Option<&Certificate> {
         _ => return None,
     };
 
-    // TODO(tnytown): verify that cert is either ECDSA or RSA?
+    // TODO(tnytown): do we need to sanity-check the algo of the certificate here?
 
     if basic_constraints.ca {
         Some(cert)
@@ -136,7 +135,9 @@ pub struct DigitallySigned {
     // opaque CtExtensions<0..2^16-1>;
     extensions: TlsByteVecU16,
 
-    // HACK(tnytown): pass in some useful extra context.
+    // XX(tnytown): pass in some useful context. These fields will not be encoded into the
+    // TLS DigitallySigned blob, but we need them to properly verify the reconstructed
+    // message.
     #[tls_codec(skip)]
     log_id: [u8; 32],
     #[tls_codec(skip)]
@@ -157,16 +158,19 @@ impl CertificateEmbeddedSCT {
             _ => return Err(SCTError::SCTListMalformed),
         };
 
+        // Parse SCT structures.
         let sct = match scts
             .parse_timestamps()
             .or(Err(SCTError::SCTListMalformed))?
             .as_slice()
         {
             [e] => e,
+            // We expect exactly one element here. Fail if there are more or less.
             _ => return Err(SCTError::SCTListMalformed),
         }
         .parse_timestamp()?;
 
+        // Traverse chain to find the issuer we're verifying against.
         let issuer = find_issuer_cert(chain);
         let issuer_id = {
             let mut hasher = sha2::Sha256::new();
@@ -198,15 +202,16 @@ impl From<&CertificateEmbeddedSCT> for DigitallySigned {
                 .collect()
         });
 
-        // TODO(tnytown): we may want to impl TryFrom instead and pass this error through.
-        // when will we fail to encode a certificate with a modified extensions list?
+        // TODO(tnytown): Instead of `expect` on `encode_to_vec`, we may want to implement
+        // `TryFrom` and pass this error through. When will we fail to encode a certificate
+        // with a modified extensions list?
         let mut tbs_precert_der = Vec::new();
         tbs_precert
             .encode_to_vec(&mut tbs_precert_der)
             .expect("failed to re-encode Precertificate!");
 
         DigitallySigned {
-            // TODO(tnytown): Why does this not implement Copy?
+            // XX(tnytown): This match is needed because `sct::Version` does not implement Copy.
             version: match value.sct.version {
                 Version::V1 => Version::V1,
             },
@@ -241,6 +246,16 @@ impl From<&SigningCertificateDetachedSCT> for DigitallySigned {
     }
 }
 
+/// Verifies a given signing certificate's Signed Certificate Timestamp.
+///
+/// SCT verification as defined by [RFC 6962] guarantees that a given certificate has been submitted
+/// to a Certificate Transparency log. Verification should be performed on the signing certificate
+/// in Sigstore verify and sign flows. Certificates that fail SCT verification are misissued and
+/// MUST NOT be trusted.
+///
+/// For more information on Certificate Transparency and the guarantees it provides, see <https://certificate.transparency.dev/howctworks/>.
+///
+/// [RFC 6962]: https://datatracker.ietf.org/doc/html/rfc6962
 pub fn verify_sct(sct: impl Into<DigitallySigned>, keyring: &Keyring) -> Result<(), SCTError> {
     let sct: DigitallySigned = sct.into();
     let serialized = sct.tls_serialize().or(Err(SCTError::VerificationFailed(

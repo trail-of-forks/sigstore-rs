@@ -133,7 +133,6 @@ impl<'ctx> AsyncSigningSession<'ctx> {
             return Err(SigstoreError::ExpiredSigningSession());
         }
 
-        // TODO(tnytown): Verify SCT here.
         if let Some(detached_sct) = &self.certs.detached_sct {
             verify_sct(detached_sct, &self.context.ctfe_keyring)?;
         } else {
