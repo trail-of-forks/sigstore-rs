@@ -27,9 +27,8 @@ use x509_cert::{
     Certificate,
 };
 
-use crate::fulcio::models::SigningCertificateDetachedSCT;
-
 use super::keyring::{Keyring, KeyringError};
+use crate::fulcio::SigningCertificateDetachedSCT;
 
 // TODO(tnytown): Migrate to const-oid's CT_PRECERT_SCTS when a new release is cut.
 const CT_PRECERT_SCTS: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.11129.2.4.2");
@@ -271,7 +270,7 @@ pub fn verify_sct(sct: impl Into<DigitallySigned>, keyring: &Keyring) -> Result<
 mod tests {
     use super::{verify_sct, CertificateEmbeddedSCT};
     use crate::crypto::keyring::Keyring;
-    use crate::fulcio::models::SigningCertificateDetachedSCT;
+    use crate::fulcio::SigningCertificateDetachedSCT;
     use p256::ecdsa::VerifyingKey;
     use std::str::FromStr;
     use x509_cert::der::DecodePem;

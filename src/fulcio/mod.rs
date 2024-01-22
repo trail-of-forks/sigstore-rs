@@ -18,7 +18,7 @@ use std::fmt::{Debug, Display, Formatter};
 use url::Url;
 use x509_cert::{der::Decode, Certificate};
 
-pub use models::CertificateResponse;
+pub use models::{CertificateResponse, SigningCertificateDetachedSCT};
 
 /// Default public Fulcio server root.
 pub const FULCIO_ROOT: &str = "https://fulcio.sigstore.dev/";
