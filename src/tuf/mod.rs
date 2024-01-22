@@ -61,6 +61,7 @@ pub trait Repository {
 pub struct ManualRepository<'a> {
     pub fulcio_certs: Option<Vec<CertificateDer<'a>>>,
     pub rekor_key: Option<Vec<u8>>,
+    pub ctfe_keys: Option<Vec<Vec<u8>>>,
 }
 
 impl Repository for ManualRepository<'_> {
@@ -79,7 +80,10 @@ impl Repository for ManualRepository<'_> {
     }
 
     fn ctfe_keys(&self) -> Result<Vec<&[u8]>> {
-        todo!()
+        Ok(match &self.ctfe_keys {
+            Some(keys) => keys.iter().map(|v| &v[..]).collect(),
+            None => Vec::new(),
+        })
     }
 }
 
