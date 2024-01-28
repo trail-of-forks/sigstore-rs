@@ -37,14 +37,15 @@ use std::{
 };
 
 mod constants;
-mod trustroot;
 
 use sha2::{Digest, Sha256};
+use sigstore_protobuf_specs::dev::sigstore::{
+    common::v1::TimeRange,
+    trustroot::v1::{CertificateAuthority, TransparencyLogInstance, TrustedRoot},
+};
 use tough::TargetName;
 use tracing::debug;
 use webpki::types::CertificateDer;
-
-use self::trustroot::{CertificateAuthority, TimeRange, TransparencyLogInstance, TrustedRoot};
 
 use super::errors::{Result, SigstoreError};
 
@@ -214,8 +215,9 @@ impl SigstoreRepository {
     fn tlog_keys(tlogs: &[TransparencyLogInstance]) -> impl Iterator<Item = &[u8]> {
         tlogs
             .iter()
-            .filter(|key| is_timerange_valid(key.public_key.valid_for.as_ref(), false))
-            .filter_map(|key| key.public_key.raw_bytes.as_ref())
+            .filter_map(|tlog| tlog.public_key.as_ref())
+            .filter(|key| is_timerange_valid(key.valid_for.as_ref(), false))
+            .filter_map(|key| key.raw_bytes.as_ref())
             .map(|key_bytes| key_bytes.as_slice())
     }
 
@@ -225,8 +227,9 @@ impl SigstoreRepository {
         allow_expired: bool,
     ) -> impl Iterator<Item = &'_ [u8]> {
         cas.iter()
-            .filter(move |ca| is_timerange_valid(Some(&ca.valid_for), allow_expired))
-            .flat_map(|ca| ca.cert_chain.certificates.iter())
+            .filter(move |ca| is_timerange_valid(ca.valid_for.as_ref(), allow_expired))
+            .flat_map(|ca| ca.cert_chain.as_ref())
+            .flat_map(|chain| chain.certificates.iter())
             .map(|cert| cert.raw_bytes.as_slice())
     }
 }
@@ -301,19 +304,21 @@ impl Repository for SigstoreRepository {
 /// `allow_expired` is `false`, also checks that the current time is not after
 /// `end`.
 fn is_timerange_valid(range: Option<&TimeRange>, allow_expired: bool) -> bool {
-    let time = chrono::Utc::now();
+    let now = chrono::Utc::now().timestamp();
 
-    match range {
+    let start = range.and_then(|r| r.start.as_ref()).map(|t| t.seconds);
+    let end = range.and_then(|r| r.end.as_ref()).map(|t| t.seconds);
+
+    match (start, end) {
         // If there was no validity period specified, the key is always valid.
-        None => true,
+        (None, _) => true,
         // Active: if the current time is before the starting period, we are not yet valid.
-        Some(range) if time < range.start => false,
-        // If we want Expired keys, then the key is valid at this point.
+        (Some(start), _) if now < start => false,
+        // If we want Expired keys, then we don't need to check the end.
         _ if allow_expired => true,
-        // Otherwise, check that we are in range if the range has an end.
-        Some(range) => match range.end {
-            None => true,
-            Some(end) => time <= end,
-        },
+        // If there is no expiry date, the key is valid.
+        (_, None) => true,
+        // If we have an expiry date, check it.
+        (_, Some(end)) => now <= end,
     }
 }

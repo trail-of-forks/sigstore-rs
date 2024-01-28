@@ -17,7 +17,7 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-pub use sigstore_protobuf_specs::Bundle;
+pub use sigstore_protobuf_specs::dev::sigstore::bundle::v1::Bundle;
 
 macro_rules! required {
     ($($base:expr )? ; $first_attr:ident $( . $rest_attrs:ident)* $( , $else_err:expr)?) => {
