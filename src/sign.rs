@@ -19,7 +19,6 @@ use std::time::SystemTime;
 
 use base64::{engine::general_purpose::STANDARD as base64, Engine as _};
 use hex;
-use json_syntax::Print;
 use p256::NistP256;
 use pkcs8::der::{Encode, EncodePem};
 use sha2::{Digest, Sha256};
@@ -29,11 +28,9 @@ use sigstore_protobuf_specs::dev::sigstore::bundle::v1::{
     verification_material, Bundle, VerificationMaterial,
 };
 use sigstore_protobuf_specs::dev::sigstore::common::v1::{
-    HashAlgorithm, HashOutput, LogId, MessageSignature, X509Certificate, X509CertificateChain,
+    HashAlgorithm, HashOutput, MessageSignature, X509Certificate, X509CertificateChain,
 };
-use sigstore_protobuf_specs::dev::sigstore::rekor::v1::{
-    Checkpoint, InclusionPromise, InclusionProof, KindVersion, TransparencyLogEntry,
-};
+use sigstore_protobuf_specs::dev::sigstore::rekor::v1::TransparencyLogEntry;
 use tokio::io::AsyncRead;
 use tokio_util::io::SyncIoBridge;
 use url::Url;
@@ -50,7 +47,6 @@ use crate::fulcio::{self, FulcioClient, FULCIO_ROOT};
 use crate::oauth::IdentityToken;
 use crate::rekor::apis::configuration::Configuration as RekorConfiguration;
 use crate::rekor::apis::entries_api::create_log_entry;
-use crate::rekor::models::LogEntry;
 use crate::rekor::models::{hashedrekord, proposed_entry::ProposedEntry as ProposedLogEntry};
 use crate::tuf::{Repository, SigstoreRepository};
 
@@ -182,7 +178,7 @@ impl<'ctx> AsyncSigningSession<'ctx> {
             input_digest: input_hash.to_owned(),
             cert: cert.to_der()?,
             signature: signature_bytes,
-            log_entry: entry,
+            log_entry: entry.try_into().expect("TODO"),
         })
     }
 
@@ -306,7 +302,7 @@ pub struct SigningArtifact {
     input_digest: Vec<u8>,
     cert: Vec<u8>,
     signature: Vec<u8>,
-    log_entry: LogEntry,
+    log_entry: TransparencyLogEntry,
 }
 
 impl SigningArtifact {
@@ -314,11 +310,6 @@ impl SigningArtifact {
     ///
     /// The resulting bundle can be serialized with [serde_json].
     pub fn to_bundle(self) -> Bundle {
-        #[inline]
-        fn decode_hex<S: AsRef<str>>(hex: S) -> Vec<u8> {
-            hex::decode(hex.as_ref()).expect("Malformed data in Rekor response")
-        }
-
         // NOTE: We explicitly only include the leaf certificate in the bundle's "chain"
         // here: the specs explicitly forbid the inclusion of the root certificate,
         // and discourage inclusion of any intermediates (since they're in the root of
@@ -329,52 +320,9 @@ impl SigningArtifact {
             }],
         };
 
-        let inclusion_proof = if let Some(proof) = self.log_entry.verification.inclusion_proof {
-            let hashes = proof.hashes.iter().map(decode_hex).collect();
-            Some(InclusionProof {
-                checkpoint: Some(Checkpoint {
-                    envelope: proof.checkpoint,
-                }),
-                hashes,
-                log_index: proof.log_index,
-                root_hash: decode_hex(proof.root_hash),
-                tree_size: proof.tree_size,
-            })
-        } else {
-            None
-        };
-
-        let canonicalized_body = {
-            let mut body = json_syntax::to_value(self.log_entry.body)
-                .expect("failed to parse constructed Body!");
-            body.canonicalize();
-            body.compact_print().to_string().into_bytes()
-        };
-
-        // TODO(tnytown): When we fix `sigstore_protobuf_specs`, have the Rekor client APIs convert
-        // responses into types from the specs as opposed to returning the raw `LogEntry` model type.
-        let tlog_entry = TransparencyLogEntry {
-            canonicalized_body,
-            inclusion_promise: Some(InclusionPromise {
-                signed_entry_timestamp: base64
-                    .decode(self.log_entry.verification.signed_entry_timestamp)
-                    .expect("malformed data in Rekor response!"),
-            }),
-            inclusion_proof,
-            integrated_time: self.log_entry.integrated_time,
-            kind_version: Some(KindVersion {
-                kind: "hashedrekord".to_owned(),
-                version: "0.0.1".to_owned(),
-            }),
-            log_id: Some(LogId {
-                key_id: decode_hex(self.log_entry.log_i_d),
-            }),
-            log_index: self.log_entry.log_index,
-        };
-
         let verification_material = Some(VerificationMaterial {
             timestamp_verification_data: None,
-            tlog_entries: vec![tlog_entry],
+            tlog_entries: vec![self.log_entry],
             content: Some(verification_material::Content::X509CertificateChain(
                 x509_certificate_chain,
             )),
