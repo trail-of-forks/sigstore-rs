@@ -15,12 +15,21 @@
 use std::cell::OnceCell;
 
 use const_oid::db::rfc5280::ID_KP_CODE_SIGNING;
-use pkcs8::der::Encode;
-use webpki::types::UnixTime;
+use tracing::debug;
+use webpki::{
+    types::{CertificateDer, UnixTime},
+    EndEntityCert,
+};
+
+use x509_cert::der::{Decode, Encode};
 use x509_cert::ext::pkix::{ExtendedKeyUsage, KeyUsage};
 
 use crate::{
-    crypto::{CertificatePool, CosignVerificationKey, Signature},
+    crypto::{
+        keyring::Keyring,
+        transparency::{verify_sct, CertificateEmbeddedSCT},
+        CertificatePool, CosignVerificationKey, Signature,
+    },
     errors::Result as SigstoreResult,
     rekor::apis::configuration::Configuration as RekorConfiguration,
     tuf::{Repository, SigstoreRepository},
@@ -34,18 +43,20 @@ pub struct Verifier<'a, R: Repository> {
     rekor_config: RekorConfiguration,
     trust_repo: R,
     cert_pool: OnceCell<CertificatePool<'a>>,
+    ctfe_keyring: Keyring,
 }
 
 impl<'a, R: Repository> Verifier<'a, R> {
     pub fn new(rekor_config: RekorConfiguration, trust_repo: R) -> SigstoreResult<Self> {
+        let ctfe_keyring = Keyring::new(trust_repo.ctfe_keys()?)?;
         Ok(Self {
             rekor_config,
             cert_pool: Default::default(),
             trust_repo,
+            ctfe_keyring,
         })
     }
 
-    /// TODO(tnytown): Evil (?) interior mutability hack to work around lifetime issues.
     fn cert_pool(&'a self) -> SigstoreResult<&CertificatePool<'a>> {
         let init_cert_pool = || {
             let certs = self.trust_repo.fulcio_certs()?;
@@ -70,6 +81,7 @@ impl<'a, R: Repository> Verifier<'a, R> {
         // 1) Verify that the signing certificate is signed by the certificate
         //    chain and that the signing certificate was valid at the time
         //    of signing.
+        // a) Verify the signing certificate's Signed Certificate Timestamp.
         // 2) Verify that the signing certificate belongs to the signer.
         // 3) Verify that the artifact signature was signed by the public key in the
         //    signing certificate.
@@ -82,36 +94,71 @@ impl<'a, R: Repository> Verifier<'a, R> {
         // 7) Verify that the signing certificate was valid at the time of
         //    signing by comparing the expiry against the integrated timestamp.
 
-        // 1) Verify that the signing certificate is signed by the root certificate and that the
-        //    signing certificate was valid at the time of signing.
-
         // 1) Verify that the signing certificate is signed by the certificate
         //    chain and that the signing certificate was valid at the time
         //    of signing.
-        let issued_at = materials
-            .certificate
-            .tbs_certificate
-            .validity
-            .not_before
-            .to_unix_duration();
-        let cert_der = &materials
-            .certificate
+        let tbs_certificate = &materials.certificate.tbs_certificate;
+        let issued_at = tbs_certificate.validity.not_before.to_unix_duration();
+        let cert_der: CertificateDer = (&materials.certificate)
             .to_der()
-            .expect("failed to DER-encode constructed Certificate!");
-        store
-            .verify_cert_with_time(cert_der, UnixTime::since_unix_epoch(issued_at))
-            .or(Err(VerificationError::CertificateVerificationFailure))?;
+            .expect("failed to DER-encode constructed Certificate!")
+            .into();
+        let ee_cert: EndEntityCert = (&cert_der).try_into().expect("TODO");
+
+        let Ok(trusted_chain) =
+            store.verify_cert_with_time(&ee_cert, UnixTime::since_unix_epoch(issued_at))
+        else {
+            return Err(VerificationError::CertificateVerificationFailure);
+        };
+
+        debug!("signing certificate chains back to trusted root");
+
+        // 1a) Verify the signing certificate's Signed Certificate Timestamp.
+        let issuer_spki = if let Some(issuer) = trusted_chain.intermediate_certificates().next() {
+            debug!("sct: an intermediate certificate is our issuer");
+            let Ok(issuer) = x509_cert::Certificate::from_der(&issuer.der()) else {
+                return Err(VerificationError::CertificateMalformed);
+            };
+
+            let Ok(bytes) = issuer.tbs_certificate.subject_public_key_info.to_der() else {
+                return Err(VerificationError::CertificateMalformed);
+            };
+
+            bytes
+        } else {
+            debug!("sct: the anchor is our issuer");
+
+            // Prefix the SPKI with the ASN.1 SEQUENCE tag and a blank short definite-form length.
+            let mut spki_sequence = vec![0x30u8, 0x00u8];
+            spki_sequence.extend(trusted_chain.anchor().subject_public_key_info.iter());
+            // Check if the body of the sequence, which we just appended, has a representable length.
+            let spki_len = spki_sequence.len() - 2;
+            if spki_len > (2 << 7) - 1 {
+                return Err(VerificationError::CertificateMalformed);
+            }
+            // Update the placeholder length.
+            spki_sequence[1] = spki_len as u8;
+
+            spki_sequence
+        };
+        debug!("sct: SPKI={}", hex::encode(&issuer_spki));
+
+        let Ok(sct) =
+            CertificateEmbeddedSCT::new_with_issuer_spki(&materials.certificate, &issuer_spki)
+        else {
+            return Err(VerificationError::CertificateMalformed);
+        };
+
+        if verify_sct(&sct, &self.ctfe_keyring).is_err() {
+            return Err(VerificationError::CertificateVerificationFailure);
+        }
+        debug!("SCT verified");
 
         // 2) Verify that the signing certificate belongs to the signer.
 
-        // TODO(tnytown): How likely is a malformed certificate in this position? Do we want to
-        // account for it and create an error type as opposed to unwrapping?
-        let (_, key_usage_ext): (bool, KeyUsage) = materials
-            .certificate
-            .tbs_certificate
-            .get()
-            .expect("Malformed certificate")
-            .expect("Malformed certificate");
+        let Ok(Some((_, key_usage_ext))) = tbs_certificate.get::<KeyUsage>() else {
+            return Err(VerificationError::CertificateMalformed);
+        };
 
         if !key_usage_ext.digital_signature() {
             return Err(VerificationError::CertificateTypeError(
@@ -119,12 +166,10 @@ impl<'a, R: Repository> Verifier<'a, R> {
             ));
         }
 
-        let (_, extended_key_usage_ext): (bool, ExtendedKeyUsage) = materials
-            .certificate
-            .tbs_certificate
-            .get()
-            .expect("Malformed certificate")
-            .expect("Malformed certificate");
+        let Ok(Some((_, extended_key_usage_ext))) = tbs_certificate.get::<ExtendedKeyUsage>()
+        else {
+            return Err(VerificationError::CertificateMalformed);
+        };
 
         if !extended_key_usage_ext.0.contains(&ID_KP_CODE_SIGNING) {
             return Err(VerificationError::CertificateTypeError(
@@ -133,27 +178,28 @@ impl<'a, R: Repository> Verifier<'a, R> {
         }
 
         policy.verify(&materials.certificate)?;
+        debug!("signing certificate conforms to policy");
 
         // 3) Verify that the signature was signed by the public key in the signing certificate
-        let signing_key: SigstoreResult<CosignVerificationKey> = (&materials
-            .certificate
-            .tbs_certificate
-            .subject_public_key_info)
-            .try_into();
+        let Ok(signing_key): SigstoreResult<CosignVerificationKey> =
+            (&tbs_certificate.subject_public_key_info).try_into()
+        else {
+            return Err(VerificationError::CertificateMalformed);
+        };
 
-        let signing_key =
-            signing_key.expect("Malformed certificate (cannot deserialize public key)");
-
-        signing_key
-            .verify_prehash(
-                Signature::Raw(&materials.signature),
-                &materials.input_digest,
-            )
-            .or(Err(VerificationError::SignatureVerificationFailure))?;
+        let verify_sig = signing_key.verify_prehash(
+            Signature::Raw(&materials.signature),
+            &materials.input_digest,
+        );
+        if verify_sig.is_err() {
+            return Err(VerificationError::SignatureVerificationFailure);
+        }
+        debug!("signature corresponds to public key");
 
         // 4) Verify that the Rekor entry is consistent with the other signing
         //    materials
         let log_entry = materials.rekor_entry();
+        debug!("log entry is consistent with other materials");
 
         // 5) Verify the inclusion proof supplied by Rekor for this artifact,
         //    if we're doing online verification.
@@ -166,16 +212,12 @@ impl<'a, R: Repository> Verifier<'a, R> {
         // 7) Verify that the signing certificate was valid at the time of
         //    signing by comparing the expiry against the integrated timestamp.
         let integrated_time = log_entry.integrated_time as u64;
-        let not_before = materials
-            .certificate
-            .tbs_certificate
+        let not_before = tbs_certificate
             .validity
             .not_before
             .to_unix_duration()
             .as_secs();
-        let not_after = materials
-            .certificate
-            .tbs_certificate
+        let not_after = tbs_certificate
             .validity
             .not_after
             .to_unix_duration()
@@ -183,7 +225,9 @@ impl<'a, R: Repository> Verifier<'a, R> {
         if !(not_before <= integrated_time && integrated_time <= not_after) {
             return Err(VerificationError::CertificateExpired);
         }
+        debug!("data signed during validity period");
 
+        debug!("successfully verified!");
         Ok(())
     }
 }

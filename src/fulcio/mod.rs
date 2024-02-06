@@ -1,4 +1,4 @@
-pub(crate) mod models;
+mod models;
 
 pub mod oauth;
 
@@ -16,7 +16,7 @@ use serde::{Serialize, Serializer};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{Debug, Display, Formatter};
 use url::Url;
-use x509_cert::{der::Decode, Certificate};
+use x509_cert::{Certificate, der::Decode};
 
 pub use models::{CertificateResponse, SigningCertificateDetachedSCT};
 

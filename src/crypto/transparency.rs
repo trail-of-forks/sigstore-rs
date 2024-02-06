@@ -144,14 +144,26 @@ pub struct DigitallySigned {
 }
 
 #[derive(Debug)]
-pub struct CertificateEmbeddedSCT {
-    cert: Certificate,
+pub struct CertificateEmbeddedSCT<'a> {
+    cert: &'a Certificate,
     sct: SignedCertificateTimestamp,
     issuer_id: [u8; 32],
 }
 
-impl CertificateEmbeddedSCT {
-    pub fn new(cert: Certificate, chain: &[Certificate]) -> Result<Self, SCTError> {
+impl<'a> CertificateEmbeddedSCT<'a> {
+    pub fn new(cert: &'a Certificate, chain: &'a [Certificate]) -> Result<Self, SCTError> {
+        // Traverse chain to find the issuer we're verifying against.
+        let issuer = find_issuer_cert(chain).ok_or(SCTError::SCTMalformed)?;
+        let spki = issuer
+            .tbs_certificate
+            .subject_public_key_info
+            .to_der()
+            .or(Err(SCTError::SCTMalformed))?;
+
+        Self::new_with_issuer_spki(cert, &spki)
+    }
+
+    pub fn new_with_issuer_spki(cert: &'a Certificate, spki: &[u8]) -> Result<Self, SCTError> {
         let scts: SignedCertificateTimestampList = match cert.tbs_certificate.get() {
             Ok(Some((_, ext))) => ext,
             _ => return Err(SCTError::SCTListMalformed),
@@ -169,16 +181,9 @@ impl CertificateEmbeddedSCT {
         }
         .parse_timestamp()?;
 
-        // Traverse chain to find the issuer we're verifying against.
-        let issuer = find_issuer_cert(chain);
         let issuer_id = {
             let mut hasher = sha2::Sha256::new();
-            issuer
-                .ok_or(SCTError::SCTMalformed)?
-                .tbs_certificate
-                .subject_public_key_info
-                .encode(&mut hasher)
-                .expect("failed to hash key!");
+            hasher.update(spki);
             hasher.finalize().into()
         };
 
@@ -190,7 +195,7 @@ impl CertificateEmbeddedSCT {
     }
 }
 
-impl From<&CertificateEmbeddedSCT> for DigitallySigned {
+impl From<&CertificateEmbeddedSCT<'_>> for DigitallySigned {
     fn from(value: &CertificateEmbeddedSCT) -> Self {
         // Construct the precert by filtering out the SCT extension.
         let mut tbs_precert = value.cert.tbs_certificate.clone();

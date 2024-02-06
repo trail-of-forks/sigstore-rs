@@ -31,6 +31,7 @@ use sigstore_protobuf_specs::dev::sigstore::{
     rekor::v1::{InclusionProof, TransparencyLogEntry},
 };
 use thiserror::Error;
+use tracing::debug;
 use x509_cert::Certificate;
 
 #[derive(Error, Debug)]
@@ -92,7 +93,6 @@ impl VerificationMaterials {
     ///
     /// [VerificationMaterial]: sigstore_protobuf_specs::dev::sigstore::bundle::v1::VerificationMaterial
     ///
-    /// TODO(tnytown): Determine if this type should yield SigstoreResult.
     pub fn from_bundle<R: Read>(input: &mut R, bundle: Bundle, offline: bool) -> Option<Self> {
         let (content, mut tlog_entries) = match bundle.verification_material {
             Some(m) => (m.content, m.tlog_entries),
@@ -161,8 +161,7 @@ impl VerificationMaterials {
                         ..
                     })
                 ) {
-                    // TODO(tnytown): Act here.
-                    // NOTE(jl): in sigstore-python, this is a no-op that prints a warning log.
+                    debug!("bundle contains inclusion proof without checkpoint");
                 }
             }
             Ok(BundleVersion::Bundle0_2) => {
@@ -177,9 +176,7 @@ impl VerificationMaterials {
                         ..
                     })
                 ) {
-                    todo!("bundle must contain checkpoint")
-                    // TODO(tnytown): Act here.
-                    // NOTE(jl): in sigstore-python, this is a no-op that prints a warning log.
+                    todo!("bundle must contain checkpoint");
                 }
             }
             Err(_) => {
