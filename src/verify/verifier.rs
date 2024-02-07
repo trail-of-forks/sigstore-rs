@@ -200,7 +200,9 @@ impl<'a, R: Repository> Verifier<'a, R> {
 
         // 4) Verify that the Rekor entry is consistent with the other signing
         //    materials
-        let log_entry = materials.rekor_entry();
+        let Some(log_entry) = materials.rekor_entry() else {
+            return Err(VerificationError::CertificateMalformed);
+        };
         debug!("log entry is consistent with other materials");
 
         // 5) Verify the inclusion proof supplied by Rekor for this artifact,

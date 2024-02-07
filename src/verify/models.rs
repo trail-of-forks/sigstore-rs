@@ -21,17 +21,19 @@ use std::{
 use crate::{
     bundle::Version as BundleVersion,
     crypto::certificate::{is_leaf, is_root_ca},
+    rekor::models as rekor,
 };
 
 use crate::Bundle;
-use pkcs8::der::Decode;
+use base64::{engine::general_purpose::STANDARD as base64, Engine as _};
+use pkcs8::der::{Decode, EncodePem};
 use sha2::{Digest, Sha256};
 use sigstore_protobuf_specs::dev::sigstore::{
     bundle::v1::{bundle, verification_material},
     rekor::v1::{InclusionProof, TransparencyLogEntry},
 };
 use thiserror::Error;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use x509_cert::Certificate;
 
 use super::policy::PolicyError;
@@ -59,10 +61,12 @@ pub enum VerificationError {
 pub type VerificationResult = Result<(), VerificationError>;
 
 pub struct VerificationMaterials {
-    pub input_digest: Vec<u8>,
-    pub certificate: Certificate,
-    pub signature: Vec<u8>,
-    rekor_entry: Option<TransparencyLogEntry>,
+    pub(crate) input_digest: Vec<u8>,
+    pub(crate) certificate: Certificate,
+    pub(crate) signature: Vec<u8>,
+    rekor_entry: TransparencyLogEntry,
+
+    offline: bool,
 }
 
 impl VerificationMaterials {
@@ -71,13 +75,20 @@ impl VerificationMaterials {
         certificate: Certificate,
         signature: Vec<u8>,
         offline: bool,
-        rekor_entry: Option<TransparencyLogEntry>,
+        rekor_entry: TransparencyLogEntry,
     ) -> Option<VerificationMaterials> {
         let mut hasher = Sha256::new();
         io::copy(input, &mut hasher).ok()?;
 
-        if offline && rekor_entry.is_none() {
-            // offline verification requires a Rekor entry
+        if matches!(
+            rekor_entry,
+            TransparencyLogEntry {
+                inclusion_promise: None,
+                inclusion_proof: None,
+                ..
+            }
+        ) {
+            error!("encountered TransparencyLogEntry without any inclusion materials");
             return None;
         }
 
@@ -86,6 +97,7 @@ impl VerificationMaterials {
             rekor_entry,
             certificate,
             signature,
+            offline,
         })
     }
 
@@ -198,19 +210,46 @@ impl VerificationMaterials {
             }
         }
 
-        Self::new(
-            input,
-            leaf_cert.clone(),
-            signature,
-            offline,
-            Some(tlog_entry),
-        )
+        Self::new(input, leaf_cert.clone(), signature, offline, tlog_entry)
     }
 
     /// Retrieves the [LogEntry] for the materials.
-    pub fn rekor_entry(&self) -> &TransparencyLogEntry {
-        // TODO(tnytown): Fetch online Rekor entry and confirm consistency here.
-        #[allow(clippy::unwrap_used)]
-        self.rekor_entry.as_ref().unwrap()
+    pub fn rekor_entry(&self) -> Option<&TransparencyLogEntry> {
+        let base64_pem_certificate =
+            base64.encode(self.certificate.to_pem(pkcs8::LineEnding::LF).ok()?);
+
+        let expected_entry = rekor::Hashedrekord {
+            kind: "hashedrekord".to_owned(),
+            api_version: "0.0.1".to_owned(),
+            spec: rekor::hashedrekord::Spec {
+                signature: rekor::hashedrekord::Signature {
+                    content: base64.encode(&self.signature),
+                    public_key: rekor::hashedrekord::PublicKey::new(base64_pem_certificate),
+                },
+                data: rekor::hashedrekord::Data {
+                    hash: rekor::hashedrekord::Hash {
+                        algorithm: rekor::hashedrekord::AlgorithmKind::sha256,
+                        value: hex::encode(&self.input_digest),
+                    },
+                },
+            },
+        };
+
+        let entry = if !self.offline && self.rekor_entry.inclusion_proof.is_none() {
+            warn!("online rekor fetching is not implemented yet, but is necessary for this bundle");
+            return None;
+        } else {
+            &self.rekor_entry
+        };
+
+        let actual: serde_json::Value =
+            serde_json::from_slice(&self.rekor_entry.canonicalized_body).ok()?;
+        let expected: serde_json::Value = serde_json::to_value(expected_entry).ok()?;
+
+        if actual != expected {
+            return None;
+        }
+
+        Some(entry)
     }
 }
