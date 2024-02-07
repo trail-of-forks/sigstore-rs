@@ -156,7 +156,7 @@ impl<'ctx> AsyncSigningSession<'ctx> {
                 signature: hashedrekord::Signature {
                     content: base64.encode(&signature_bytes),
                     public_key: hashedrekord::PublicKey::new(
-                        base64.encode(cert.to_pem(pkcs8::LineEnding::CRLF)?),
+                        base64.encode(cert.to_pem(pkcs8::LineEnding::LF)?),
                     ),
                 },
                 data: hashedrekord::Data {

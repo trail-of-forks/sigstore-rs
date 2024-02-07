@@ -35,7 +35,7 @@ where
     S: Serializer,
 {
     let encoded = input
-        .to_pem(pkcs8::LineEnding::CRLF)
+        .to_pem(pkcs8::LineEnding::LF)
         .map_err(serde::ser::Error::custom)?;
 
     Base64::<Standard, Padded>::serialize_as(&encoded, ser)
