@@ -177,7 +177,9 @@ impl<'a, R: Repository> Verifier<'a, R> {
             ));
         }
 
-        policy.verify(&materials.certificate)?;
+        if let Some(err) = policy.verify(&materials.certificate) {
+            return Err(err)?;
+        }
         debug!("signing certificate conforms to policy");
 
         // 3) Verify that the signature was signed by the public key in the signing certificate

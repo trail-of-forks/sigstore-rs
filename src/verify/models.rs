@@ -31,8 +31,10 @@ use sigstore_protobuf_specs::dev::sigstore::{
     rekor::v1::{InclusionProof, TransparencyLogEntry},
 };
 use thiserror::Error;
-use tracing::debug;
+use tracing::{debug, error};
 use x509_cert::Certificate;
+
+use super::policy::PolicyError;
 
 #[derive(Error, Debug)]
 pub enum VerificationError {
@@ -51,8 +53,8 @@ pub enum VerificationError {
     #[error("Failed to verify that the signature corresponds to the input")]
     SignatureVerificationFailure,
 
-    #[error("{0}")]
-    PolicyFailure(String),
+    #[error(transparent)]
+    PolicyFailure(#[from] PolicyError),
 }
 pub type VerificationResult = Result<(), VerificationError>;
 
@@ -92,11 +94,13 @@ impl VerificationMaterials {
     /// For details on bundle semantics, please refer to [VerificationMaterial].
     ///
     /// [VerificationMaterial]: sigstore_protobuf_specs::dev::sigstore::bundle::v1::VerificationMaterial
-    ///
     pub fn from_bundle<R: Read>(input: &mut R, bundle: Bundle, offline: bool) -> Option<Self> {
         let (content, mut tlog_entries) = match bundle.verification_material {
             Some(m) => (m.content, m.tlog_entries),
-            _ => todo!("missing VerificationMaterial"),
+            _ => {
+                error!("bundle missing VerificationMaterial");
+                return None;
+            }
         };
 
         // Parse the certificates. The first entry in the chain MUST be a leaf certificate, and the
@@ -107,7 +111,10 @@ impl VerificationMaterials {
             Some(verification_material::Content::Certificate(cert)) => {
                 vec![cert]
             }
-            _ => todo!("unsupported VerificationMaterial Content"),
+            _ => {
+                error!("bundle includes unsupported VerificationMaterial Content");
+                return None;
+            }
         };
         let certs = certs
             .iter()
@@ -132,11 +139,14 @@ impl VerificationMaterials {
 
         let signature = match bundle.content? {
             bundle::Content::MessageSignature(s) => s.signature,
-            _ => todo!("DSSE signatures in bundles"),
+            _ => {
+                error!("bundle includes unsupported DSSE signature");
+                return None;
+            }
         };
 
         if tlog_entries.len() != 1 {
-            // Expected exactly one tlog entry.
+            error!("bundle expected 1 tlog entry; got {}", tlog_entries.len());
             return None;
         }
         let tlog_entry = tlog_entries.remove(0);
@@ -151,7 +161,8 @@ impl VerificationMaterials {
         match BundleVersion::from_str(&bundle.media_type) {
             Ok(BundleVersion::Bundle0_1) => {
                 if inclusion_promise.is_none() {
-                    todo!("bundle must contain inclusion promise")
+                    error!("bundle must contain inclusion promise");
+                    return None;
                 }
 
                 if matches!(
@@ -161,12 +172,13 @@ impl VerificationMaterials {
                         ..
                     })
                 ) {
-                    debug!("bundle contains inclusion proof without checkpoint");
+                    debug!("0.1 bundle contains inclusion proof without checkpoint");
                 }
             }
             Ok(BundleVersion::Bundle0_2) => {
                 if inclusion_proof.is_none() {
-                    todo!("bundle must contain inclusion proof")
+                    error!("bundle must contain inclusion proof");
+                    return None;
                 }
 
                 if matches!(
@@ -176,11 +188,13 @@ impl VerificationMaterials {
                         ..
                     })
                 ) {
-                    todo!("bundle must contain checkpoint");
+                    error!("bundle must contain checkpoint");
+                    return None;
                 }
             }
             Err(_) => {
-                todo!("unknown bundle version")
+                error!("unknown bundle version");
+                return None;
             }
         }
 
