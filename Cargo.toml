@@ -127,7 +127,7 @@ rustls-webpki = { version = "0.102.1", features = ["alloc"] }
 serde_repr = "0.1.16"
 hex = "0.4.3"
 json-syntax = { version = "0.11.1", features = ["canonicalize", "serde"] }
-tls_codec = { version = "0.4.0", features = ["derive"] }
+tls_codec = { version = "0.4.1", features = ["derive"] }
 ring = "0.17.6"
 
 [dev-dependencies]
@@ -143,8 +143,6 @@ tempfile = "3.3.0"
 testcontainers = "0.15"
 tracing-subscriber = { version = "0.3.9", features = ["env-filter"] }
 
-[patch.crates-io]
-tls_codec = { git = "https://github.com/RustCrypto/formats", rev = "189b4d0d43c75b5e3ab9031ef0008c7ba9ae9378" }
 # cosign example mappings
 
 [[example]]
