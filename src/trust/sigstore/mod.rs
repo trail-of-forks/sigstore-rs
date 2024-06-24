@@ -20,23 +20,98 @@
 //!
 //! These can later be given to [`cosign::ClientBuilder`](crate::cosign::ClientBuilder)
 //! to enable Fulcio and Rekor integrations.
-use futures_util::TryStreamExt;
-use sha2::{Digest, Sha256};
 use std::path::Path;
-use tokio_util::bytes::BytesMut;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio_util::compat::FuturesAsyncReadCompatExt;
+use tracing::debug;
+use tuf::metadata::{RawSignedMetadata, TargetPath};
+use tuf::repository::{
+    EphemeralRepository, FileSystemRepository, HttpRepository, HttpRepositoryBuilder,
+    RepositoryProvider,
+};
 
 use sigstore_protobuf_specs::dev::sigstore::{
     common::v1::TimeRange,
     trustroot::v1::{CertificateAuthority, TransparencyLogInstance, TrustedRoot},
 };
-use tough::TargetName;
-use tracing::debug;
 use webpki::types::CertificateDer;
 
 mod constants;
 
 use crate::errors::{Result, SigstoreError};
 pub use crate::trust::{ManualTrustRoot, TrustRoot};
+
+enum TUFClient<R>
+where
+    R: RepositoryProvider<tuf::pouf::Pouf1>,
+{
+    Cached(tuf::client::Client<tuf::pouf::Pouf1, FileSystemRepository<tuf::pouf::Pouf1>, R>),
+    Ephemeral(tuf::client::Client<tuf::pouf::Pouf1, EphemeralRepository<tuf::pouf::Pouf1>, R>),
+}
+
+impl<R> TUFClient<R>
+where
+    R: RepositoryProvider<tuf::pouf::Pouf1>,
+{
+    async fn from_remote(remote: R, cache_dir: Option<&Path>) -> Result<Self> {
+        let config = Default::default();
+        let root = RawSignedMetadata::new(
+            constants::static_resource("root.json")
+                .expect("failed to fetch embedded TUF root!")
+                .to_owned(),
+        );
+
+        let result = match cache_dir {
+            Some(dir) => Self::Cached(
+                tuf::client::Client::with_trusted_root(
+                    config,
+                    &root,
+                    FileSystemRepository::new(dir),
+                    remote,
+                )
+                .await?,
+            ),
+            None => Self::Ephemeral(
+                tuf::client::Client::with_trusted_root(
+                    config,
+                    &root,
+                    EphemeralRepository::new(),
+                    remote,
+                )
+                .await?,
+            ),
+        };
+
+        Ok(result)
+    }
+
+    async fn fetch_target(&mut self, name: &str) -> Result<Box<dyn AsyncRead + Unpin + Send + '_>> {
+        let path = TargetPath::new(name)?;
+        let local: &dyn RepositoryProvider<tuf::pouf::Pouf1> = match self {
+            TUFClient::Cached(c) => {
+                c.fetch_target_to_local(&path).await?;
+                c.local_repo()
+            }
+            TUFClient::Ephemeral(c) => {
+                c.fetch_target_to_local(&path).await?;
+                c.local_repo()
+            }
+        };
+
+        let contents = local.fetch_target(&path).await?;
+
+        // Very silly: the inner value is already boxed, but we want a Tokio AsyncRead type, which
+        // we need to re-box ...
+        Ok(Box::new(contents.compat()))
+    }
+
+    async fn update(&mut self) -> Result<bool> {
+        Ok(match self {
+            TUFClient::Cached(c) => c.update().await,
+            TUFClient::Ephemeral(c) => c.update().await,
+        }?)
+    }
+}
 
 /// Securely fetches Rekor public key and Fulcio certificates from Sigstore's TUF repository.
 #[derive(Debug)]
@@ -45,93 +120,30 @@ pub struct SigstoreTrustRoot {
 }
 
 impl SigstoreTrustRoot {
-    /// Constructs a new trust root from a [`tough::Repository`].
-    async fn from_tough(
-        repository: &tough::Repository,
-        checkout_dir: Option<&Path>,
-    ) -> Result<Self> {
-        let trusted_root = {
-            let data = Self::fetch_target(repository, checkout_dir, "trusted_root.json").await?;
-            serde_json::from_slice(&data[..])?
-        };
-
-        Ok(Self { trusted_root })
-    }
-
     /// Constructs a new trust root backed by the Sigstore Public Good Instance.
     pub async fn new(cache_dir: Option<&Path>) -> Result<Self> {
         // These are statically defined and should always parse correctly.
-        let metadata_base = url::Url::parse(constants::SIGSTORE_METADATA_BASE)?;
-        let target_base = url::Url::parse(constants::SIGSTORE_TARGET_BASE)?;
+        let metadata_base = url::Url::parse(constants::TUF_REPO_BASE)?;
+        let remote: HttpRepository<_, tuf::pouf::Pouf1> =
+            HttpRepositoryBuilder::new(metadata_base, Default::default()).build();
 
-        let repository = tough::RepositoryLoader::new(
-            &constants::static_resource("root.json").expect("Failed to fetch embedded TUF root!"),
-            metadata_base,
-            target_base,
-        )
-        .expiration_enforcement(tough::ExpirationEnforcement::Safe)
-        .load()
-        .await
-        .map_err(Box::new)?;
+        debug!("constructing TUF client ...");
+        let mut client: TUFClient<_> = TUFClient::from_remote(remote, cache_dir).await?;
 
-        Self::from_tough(&repository, cache_dir).await
-    }
+        debug!("updating TUF metadata ...");
+        client.update().await?;
 
-    async fn fetch_target<N>(
-        repository: &tough::Repository,
-        checkout_dir: Option<&Path>,
-        name: N,
-    ) -> Result<Vec<u8>>
-    where
-        N: TryInto<TargetName, Error = tough::error::Error>,
-    {
-        let name: TargetName = name.try_into().map_err(Box::new)?;
-        let local_path = checkout_dir.as_ref().map(|d| d.join(name.raw()));
+        debug!("fetching trusted root ...");
+        let mut trusted_root_buf = Vec::new();
+        client
+            .fetch_target("trusted_root.json")
+            .await?
+            .read_to_end(&mut trusted_root_buf)
+            .await?;
 
-        let read_remote_target = || async {
-            match repository.read_target(&name).await {
-                Ok(Some(s)) => Ok(s.try_collect::<BytesMut>().await.map_err(Box::new)?),
-                _ => Err(SigstoreError::TufTargetNotFoundError(name.raw().to_owned())),
-            }
-        };
-
-        // First, try reading the target from disk cache.
-        let data = if let Some(Ok(local_data)) = local_path.as_ref().map(std::fs::read) {
-            debug!("{}: reading from disk cache", name.raw());
-            local_data.to_vec()
-        // Try reading the target embedded into the binary.
-        } else if let Some(embedded_data) = constants::static_resource(name.raw()) {
-            debug!("{}: reading from embedded resources", name.raw());
-            embedded_data.to_vec()
-        // If all else fails, read the data from the TUF repo.
-        } else if let Ok(remote_data) = read_remote_target().await {
-            debug!("{}: reading from remote", name.raw());
-            remote_data.to_vec()
-        } else {
-            return Err(SigstoreError::TufTargetNotFoundError(name.raw().to_owned()));
-        };
-
-        // Get metadata (hash) of the target and update the disk copy if it doesn't match.
-        let Some(target) = repository.targets().signed.targets.get(&name) else {
-            return Err(SigstoreError::TufMetadataError(format!(
-                "couldn't get metadata for {}",
-                name.raw()
-            )));
-        };
-
-        let data = if Sha256::digest(&data)[..] != target.hashes.sha256[..] {
-            debug!("{}: out of date", name.raw());
-            read_remote_target().await?.to_vec()
-        } else {
-            data
-        };
-
-        // Write our updated data back to the disk.
-        if let Some(local_path) = local_path {
-            std::fs::write(local_path, &data)?;
-        }
-
-        Ok(data)
+        Ok(Self {
+            trusted_root: serde_json::from_slice(&trusted_root_buf)?,
+        })
     }
 
     #[inline]

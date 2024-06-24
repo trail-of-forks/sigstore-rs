@@ -13,8 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) const SIGSTORE_METADATA_BASE: &str = "https://tuf-repo-cdn.sigstore.dev";
-pub(crate) const SIGSTORE_TARGET_BASE: &str = "https://tuf-repo-cdn.sigstore.dev/targets";
+pub(crate) const TUF_REPO_BASE: &str = "https://tuf-repo-cdn.sigstore.dev";
 
 macro_rules! impl_static_resource {
     {$($name:literal,)+} => {

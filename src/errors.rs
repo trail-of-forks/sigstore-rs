@@ -176,7 +176,7 @@ pub enum SigstoreError {
     #[cfg(feature = "sigstore-trust-root")]
     #[cfg_attr(docsrs, doc(cfg(feature = "sigstore-trust-root")))]
     #[error(transparent)]
-    TufError(#[from] Box<tough::error::Error>),
+    TufError(#[from] tuf::Error),
 
     #[error("TUF target {0} not found inside of repository")]
     TufTargetNotFoundError(String),
